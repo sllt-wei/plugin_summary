@@ -19,7 +19,7 @@ from common.log import logger
 from common import const
 
 from plugins.plugin_summary.db import Db
-from text2img import Text2ImageConverter
+from plugins.plugin_summary.text2img import Text2ImageConverter
 
 TRANSLATE_PROMPT = '''
 You are now the following python function: 
