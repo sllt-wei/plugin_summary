@@ -56,10 +56,10 @@ def find_json(json_string):
     return json_string
 
 
-@plugins.register(name="summaryV2",
-                  desire_priority=-1,
+@plugins.register(name="summary",
+                  desire_priority=0,
                   desc="A simple plugin to summary messages",
-                  version="0.0.3",
+                  version="0.0.4",
                   author="sineom")
 class Summary(Plugin):
     def __init__(self):
