@@ -19,6 +19,7 @@ from common.log import logger
 from common import const
 
 from plugins.plugin_summary.db import Db
+from text2img import Text2ImageConverter
 
 TRANSLATE_PROMPT = '''
 You are now the following python function: 
@@ -64,6 +65,7 @@ class Summary(Plugin):
     def __init__(self):
         super().__init__()
         self.config = super().load_config()
+        self.text2img = Text2ImageConverter()
         if not self.config:
             # 未加载到配置，使用模板中的配置
             self.config = self._load_config_template()
@@ -324,9 +326,12 @@ class Summary(Plugin):
                 return
 
             if len(summarys) == 1:
-                reply = Reply(ReplyType.TEXT, f"本次总结了{count}条消息。\n\n" + summarys[0])
+                image_path = self.text2img.convert_text_to_image(summarys[0])
+                reply = Reply(ReplyType.IMAGE, image_path)
                 e_context['reply'] = reply
                 e_context.action = EventAction.BREAK_PASS
+                # 删除文件
+                os.remove(image_path)
                 self.db.save_summary_time(session_id, int(time.time()))
                 return
 
