@@ -18,6 +18,10 @@
 将 `plugins/plugin_summary` 目录下的 `config.json.template` 配置模板复制为最终生效的 `config.json`。 (如果未配置则会默认使用`config.json.template`模板中配置)。
 
 
+## 总结图片的生成
+总结图片基于[text2image](https://www.text2image.online/)生成，使用selenium驱动浏览器，所以需要安装chrome浏览器以及相关字体
+
+
 以下是插件配置项说明：
 
 ```bash

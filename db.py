@@ -7,6 +7,7 @@
 @description  sqlite操作
 @Copyright (c) 2022 by sineom, All Rights Reserved.
 """
+import datetime
 import os
 import sqlite3
 
@@ -20,7 +21,7 @@ class Db:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         c = self.conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS chat_records
-                            (sessionid TEXT, msgid INTEGER, user TEXT, content TEXT, type TEXT, timestamp INTEGER, is_triggered INTEGER,
+                            (sessionid TEXT, msgid INTEGER, user TEXT, content TEXT, type TEXT, timestamp TEXT, is_triggered INTEGER, create_time TEXT,
                             PRIMARY KEY (sessionid, msgid))''')
 
         # 创建一个总结时间表，记录合适开始了总结的时间
@@ -49,10 +50,12 @@ class Db:
 
     def insert_record(self, session_id, msg_id, user, content, msg_type, timestamp, is_triggered=0):
         c = self.conn.cursor()
-        logger.debug("[Summary] insert record: {} {} {} {} {} {} {}".format(session_id, msg_id, user, content, msg_type,
-                                                                            timestamp, is_triggered))
-        c.execute("INSERT OR REPLACE INTO chat_records VALUES (?,?,?,?,?,?,?)",
-                  (session_id, msg_id, user, content, msg_type, timestamp, is_triggered))
+        # 10位timestamp 转换为易读的时间
+        create_time = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        logger.debug("[Summary] insert record: {} {} {} {} {} {} {} {}".format(session_id, msg_id, user, content, msg_type,
+                                                                            timestamp, is_triggered, create_time))
+        c.execute("INSERT OR REPLACE INTO chat_records VALUES (?,?,?,?,?,?,?,?)",
+                  (session_id, msg_id, user, content, msg_type, timestamp, is_triggered, create_time))
         self.conn.commit()
 
     # 根据时间删除记录

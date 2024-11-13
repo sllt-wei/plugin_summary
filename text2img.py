@@ -2,7 +2,7 @@
 Author: sineom h.sineom@gmail.com
 Date: 2024-11-11 17:42:22
 LastEditors: sineom h.sineom@gmail.com
-LastEditTime: 2024-11-11 17:42:25
+LastEditTime: 2024-11-13 16:46:04
 FilePath: /plugin_summary/text2img.py
 Description: 
 
@@ -23,6 +23,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
 class Text2ImageConverter:
     def __init__(self):
         self.driver = None
@@ -32,8 +33,15 @@ class Text2ImageConverter:
     def setup_driver(self):
         """初始化浏览器驱动"""
         try:
-            self.driver = webdriver.Chrome()
-            self.driver.maximize_window()  # 最大化窗口，提高元素可见性
+            option = webdriver.ChromeOptions()
+            option.add_argument('--headless')
+            option.add_argument('--disable-gpu')
+            option.add_argument('--no-sandbox')
+            option.add_argument('--disable-dev-shm-usage')
+            option.add_argument('--remote-debugging-port=9222')
+            
+            self.driver = webdriver.Chrome(options=option)
+            
         except WebDriverException as e:
             logger.error(f"Failed to initialize Chrome driver: {e}")
             raise
@@ -130,7 +138,6 @@ class Text2ImageConverter:
             with open(image_path, 'wb') as f:
                 f.write(img_data)
             logger.info(f"Image saved to {image_path}")
-            
             return image_path
 
         except Exception as e:
