@@ -94,7 +94,7 @@ trigger_prefix =  "$"
 @plugins.register(name="summary",
                   desire_priority=0,
                   desc="A simple plugin to summary messages",
-                  version="0.0.4",
+                  version="0.0.5",
                   author="sineom")
 class Summary(Plugin):
     def __init__(self):
