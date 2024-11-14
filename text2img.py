@@ -2,7 +2,7 @@
 Author: sineom h.sineom@gmail.com
 Date: 2024-11-11 17:42:22
 LastEditors: sineom h.sineom@gmail.com
-LastEditTime: 2024-11-13 16:46:04
+LastEditTime: 2024-11-14 09:30:53
 FilePath: /plugin_summary/text2img.py
 Description: 
 

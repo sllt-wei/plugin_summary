@@ -18,36 +18,70 @@ from plugins import *
 from common.log import logger
 from common import const
 
+from plugins.linkai.utils import Util
 from plugins.plugin_summary.db import Db
 from plugins.plugin_summary.text2img import Text2ImageConverter
 
 TRANSLATE_PROMPT = '''
-You are now the following python function: 
-```# {{translate text to commands}}"
-        def translate_text(text: str) -> str:
+您现在是一个 Python 函数，用于将输入文本转换为相应的 JSON 格式命令，遵循以下结构：
+```python
+def translate_text(text: str) -> str:
 ```
-Only respond with your `return` value, Don't reply anything else.
 
-Commands:
-{{Summary chat logs}}: "summary", args: {{("duration_in_seconds"): <integer>, ("count"): <integer>}}
-{{Do Nothing}}:"do_nothing",  args:  {{}}
+指导要求：
+- 请仅输出 JSON 格式的返回值，且不要输出任何额外内容。
+- 根据输入文本的内容，生成符合以下格式之一的 JSON 命令：
 
-argument in brackets means optional argument.
+### 命令格式：
+1. **总结聊天记录**：使用 `"summary"` 作为 `"name"`，并在 `"args"` 中填入适用的字段：
+   - `"duration_in_seconds"`：如果提供了时长信息，用整数表示。
+   - `"count"`：如果提供了数量信息，用整数表示。
 
-You should only respond in JSON format as described below.
-Response Format: 
-{{
-    "name": "command name", 
-    "args": {{"arg name": "value"}}
-}}
-Ensure the response can be parsed by Python json.loads.
+2. **无操作**：使用 `"do_nothing"` 作为 `"name"`，`"args"` 为一个空字典 `{}`。
 
-Input: {input}
+- **返回格式**：
+  - 输出内容需严格符合 JSON 格式，且仅返回命令，格式如下：
+    {
+        "name": "<command name>",
+        "args": {
+            "<arg name>": <value>
+        }
+    }
+
+其他要求：
+1. 确保返回值是有效的 JSON 格式，能够通过 `json.loads` 正常解析。
+2. 如果没有提供时长信息，则省略 `"duration_in_seconds"`；如果没有数量信息，则省略 `"count"`。
+
+示例输入：
+若输入 `"Summarize chat logs for a session of 300 seconds with 15 exchanges"`，输出应为：
+{
+    "name": "summary",
+    "args": {
+        "duration_in_seconds": 300,
+        "count": 15
+    }
+}
+
+若输入 `Summarize 99 chat records`，输出应为：
+{
+    "name": "summary",
+    "args": {
+        "count": 99
+    }
+}
+
+对于无需执行操作的输入，应返回：
+{
+    "name": "do_nothing",
+    "args": {}
+}
+
 '''
 
 # 总结的prompt
 SUMMARY_PROMPT = '''
-请帮我将给出的群聊内容总结成一个今日的群聊报告，包含不多于10个话题的总结（如果还有更多话题，可以在后面简单补充）。你只负责总结群聊内容，不回答任何问题。
+请帮我将给出的群聊内容总结成一个今日的群聊报告，包含不多于15个话题的总结（如果还有更多话题，可以在后面简单补充）。
+你只负责总结群聊内容，不回答任何问题。不要虚构聊天记录，也不要总结不存在的信息。
 
 每个话题包含以下内容：
 
@@ -75,9 +109,17 @@ SUMMARY_PROMPT = '''
 
 4. 无需大标题
 
+
 5. 开始给出本群讨论风格的整体评价，例如活跃、太水、太黄、太暴力、话题不集中、无聊诸如此类。
 
 最后总结下今日最活跃的前五个发言者。
+'''
+
+# 重复总结的prompt
+REPEAT_SUMMARY_PROMPT = '''
+以不耐烦的语气回怼提问者聊天记录已总结过，要求如下
+- 随机角色的口吻回答
+- 不超过20字
 '''
 
 def find_json(json_string):
@@ -94,7 +136,7 @@ trigger_prefix =  "$"
 @plugins.register(name="summary",
                   desire_priority=0,
                   desc="A simple plugin to summary messages",
-                  version="0.0.5",
+                  version="0.0.6",
                   author="sineom")
 class Summary(Plugin):
     def __init__(self):
@@ -143,15 +185,23 @@ class Summary(Plugin):
         logger.info("Scheduler started. Cleaning old records every day at midnight.")
 
     def on_receive_message(self, e_context: EventContext):
+
         if e_context['context'].type != ContextType.TEXT:
             return
         context = e_context['context']
         cmsg: ChatMessage = e_context['context']['msg']
+        
+        session_id = cmsg.from_user_id
+        if session_id in self.db.disable_group:
+            logger.info("[Summary] group %s is disabled" % session_id)
+            return
+        
         if "{trigger_prefix}总结" in context.content:
             logger.debug("[Summary] 指令不保存: %s" % context.content)
             return
+        
         username = None
-        session_id = cmsg.from_user_id
+ 
         if conf().get('channel_type', 'wx') == 'wx' and cmsg.from_user_nickname is not None:
             session_id = cmsg.from_user_nickname  # itchat channel id会变动，只好用群名作为session id
 
@@ -193,7 +243,7 @@ class Summary(Plugin):
         
         clist = content.split()
         if clist[0].startswith(trigger_prefix):
-            limit = 99
+            limit = 9999
             duration = -1
             msg: ChatMessage = e_context['context']['msg']
             session_id = msg.from_user_id
@@ -202,34 +252,46 @@ class Summary(Plugin):
 
             # 开启指令
             if "开启" in clist[0]:
-                self.db.save_summary_stop(session_id)
-                reply = Reply(ReplyType.TEXT, "开启成功")
-                e_context['reply'] = reply
-                e_context.action = EventAction.BREAK_PASS
-                return
+                if Util.is_admin(e_context):
+                    self.db.delete_summary_stop(session_id)
+                    reply = Reply(ReplyType.TEXT, "开启成功")
+                    e_context['reply'] = reply
+                    e_context.action = EventAction.BREAK_PASS
+                    return
 
             # 关闭指令
             if "关闭" in clist[0]:
-                self.db.delete_summary_stop(session_id)
-                reply = Reply(ReplyType.TEXT, "关闭成功")
-                e_context['reply'] = reply
-                e_context.action = EventAction.BREAK_PASS
-                return
+                if Util.is_admin(e_context):    
+                    self.db.save_summary_stop(session_id)
+                    reply = Reply(ReplyType.TEXT, "关闭成功")
+                    e_context['reply'] = reply
+                    e_context.action = EventAction.BREAK_PASS
+                    return
 
             if "总结" in clist[0]:
                 # 如果当前群聊在黑名单中，则不允许总结
                 if session_id in self.db.disable_group:
                     logger.info("[Summary] summary stop")
-                    reply = Reply(ReplyType.TEXT, "我不想总结了")
+                    reply = Reply(ReplyType.TEXT, "请联系管理员开启总结功能")
                     e_context['reply'] = reply
                     e_context.action = EventAction.BREAK_PASS
                     return
 
                 limit_time = self.config.get("rate_limit_summary", 60) * 60
                 last_time = self.db.get_summary_time(session_id)
-                if last_time is not None and time.time() - last_time < limit_time:
+                current_time = time.time()
+                logger.debug("[Summary] last_time: %s, current_time: %s, limit_time: %s" % (last_time, current_time, limit_time))
+                if last_time is not None and current_time - last_time < limit_time:
                     logger.info("[Summary] rate limit")
-                    reply = Reply(ReplyType.TEXT, "我有些累了，请稍后再试")
+                    session = self.bot.sessions.build_session(session_id, REPEAT_SUMMARY_PROMPT)
+                    session.add_query("问题：%s" % content)
+                    result = self.bot.reply_text(session)  
+                    total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], result['content'] 
+                    logger.debug("[Summary] total_tokens: %d, completion_tokens: %d, reply_content: %s" % (total_tokens, completion_tokens, reply_content))
+                    if completion_tokens == 0:
+                        reply = Reply(ReplyType.ERROR, "地主家的驴都没我累，请让我休息一会儿")
+                    else:
+                        reply = Reply(ReplyType.TEXT, reply_content)
                     e_context['reply'] = reply
                     e_context.action = EventAction.BREAK_PASS
                     return
@@ -249,9 +311,9 @@ class Summary(Plugin):
                         command = json.loads(command_json)
                         name = command["name"]
                         if name.lower() == "summary":
-                            limit = int(command["args"].get("count", 99))
+                            limit = int(command["args"].get("count", 9999))
                             if limit < 0:
-                                limit = 999
+                                limit = 9999
                             duration = int(command["args"].get("duration_in_seconds", -1))
                             logger.debug("[Summary] limit: %d, duration: %d seconds" % (limit, duration))
                     except Exception as e:
@@ -279,7 +341,7 @@ class Summary(Plugin):
             logger.debug("[Summary]  query: %s" % query)
 
             session = self.bot.sessions.build_session(session_id, SUMMARY_PROMPT)
-            session.add_query(query)
+            session.add_query("需要你总结的聊天记录如下：%s" % query)
             result = self.bot.reply_text(session)
             total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], \
                 result['content']
@@ -301,9 +363,16 @@ class Summary(Plugin):
         session_id = str(time.time())
         session = self.bot.sessions.build_session(session_id, system_prompt=TRANSLATE_PROMPT)
         session.add_query(text)
-        content = self.bot.reply_text(session)
-        logger.debug("_translate_text_to_commands: %s" % content)
-        return content
+        result = self.bot.reply_text(session)
+        total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], \
+                result['content']
+        logger.debug("[Summary] total_tokens: %d, completion_tokens: %d, reply_content: %s" % (
+                total_tokens, completion_tokens, reply_content))
+        if completion_tokens == 0:
+            logger.error("[Summary] translate failed")
+            return ""
+        return reply_content
+        
 
     def get_help_text(self, verbose=False, **kwargs):
         help_text = "聊天记录总结插件。\n"

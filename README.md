@@ -3,8 +3,6 @@
 ## 一个基于[ChatGPT-on-Wechat](https://github.com/zhayujie/chatgpt-on-wechat)项目的简单插件，
 由于[原插件](https://github.com/lanvent/plugin_summary)安装始终失败，故在此基础上进行了改写。
 
-该插件也是用户根据需求开发自定义插件的示例插件，参考[插件开发说明](https://github.com/zhayujie/chatgpt-on-wechat/tree/master/plugins)
-
 ## 安装
 使用管理员口令在线安装即可，参考这里去如何[认证管理员](https://www.wangpc.cc/aigc/chatgpt-on-wechat_plugin/)！
 
@@ -20,6 +18,47 @@
 
 ## 总结图片的生成
 总结图片基于[text2image](https://www.text2image.online/)生成，使用selenium驱动浏览器，所以需要安装chrome浏览器以及相关字体
+
+### Ubuntu安装字体(其他系统请自行搜索)
+首先安装字体：
+
+```bash
+sudo apt install fonts-noto-color-emoji
+```
+
+### 配置字体
+
+> 新建~/.config/fontconfig/conf.d/01-emoji.conf文件，内容为：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <alias>
+    <family>serif</family>
+    <prefer>
+      <family>Noto Color Emoji</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>sans-serif</family>
+    <prefer>
+      <family>Noto Color Emoji</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>monospace</family>
+    <prefer>
+      <family>Noto Color Emoji</family>
+    </prefer>
+  </alias>
+</fontconfig>
+```
+然后刷新字体缓存：
+
+fc-cache -f -v
+
+最后重启应用或者直接重启系统就可以看到效果了。
 
 
 以下是插件配置项说明：
