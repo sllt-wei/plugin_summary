@@ -93,6 +93,22 @@ class Db:
         c.execute("UPDATE summary_time SET summary_time = ? WHERE sessionid = ?",
                   (summary_time, session_id))
         self.conn.commit()
+    
+    # 根据user模糊匹配聊天记录，若user包含在条件中，则筛选出user的聊天记录
+    def get_records_by_user(self, session_id, user):
+        c = self.conn.cursor()
+        # 将搜索条件按@分割成多个用户名,并去掉@符号
+        users = [u.lstrip('@') for u in user.split() if u.startswith('@')]
+        if not users:
+            return []
+        # 构建SQL查询条件
+        sql = "SELECT * FROM chat_records WHERE sessionid=? AND ("
+        sql += " OR ".join(["user LIKE ?" for _ in users])
+        sql += ")"
+        # 构建参数列表
+        params = [session_id] + ["%" + u + "%" for u in users]
+        c.execute(sql, params)
+        return c.fetchall()
 
     # 获取总结时间，如果不存在返回None
     def get_summary_time(self, session_id):
@@ -136,3 +152,5 @@ class Db:
         c = self.conn.cursor()
         c.execute("SELECT sessionid FROM summary_stop")
         return set(c.fetchall())
+
+

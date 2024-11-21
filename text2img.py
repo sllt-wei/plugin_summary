@@ -2,7 +2,7 @@
 Author: sineom h.sineom@gmail.com
 Date: 2024-11-11 17:42:22
 LastEditors: sineom h.sineom@gmail.com
-LastEditTime: 2024-11-14 09:30:53
+LastEditTime: 2024-11-21 18:15:04
 FilePath: /plugin_summary/text2img.py
 Description: 
 
@@ -121,7 +121,7 @@ class Text2ImageConverter:
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'img[alt="Image"]'))
             )
             # 确保图片已经更新（等待src属性变化）
-            time.sleep(2)
+            time.sleep(0.7)
             logger.info("Image generated")
 
             # 获取并保存图片

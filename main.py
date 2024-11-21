@@ -3,6 +3,7 @@
 import json
 import os, re
 import time
+import threading
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -122,6 +123,13 @@ REPEAT_SUMMARY_PROMPT = '''
 - 不超过20字
 '''
 
+# 总结中的prompt
+SUMMARY_IN_PROGRESS_PROMPT = '''
+以不耐烦的语气回答提问者聊天记录正在总结中，要求如下
+- 随机角色的口吻回答
+- 不超过20字
+'''
+
 def find_json(json_string):
     json_pattern = re.compile(r"\{[\s\S]*\}")
     json_match = json_pattern.search(json_string)
@@ -136,7 +144,7 @@ trigger_prefix =  "$"
 @plugins.register(name="summary",
                   desire_priority=0,
                   desc="A simple plugin to summary messages",
-                  version="0.0.6",
+                  version="0.0.5",
                   author="sineom")
 class Summary(Plugin):
     def __init__(self):
@@ -154,6 +162,12 @@ class Summary(Plugin):
         self.bot = bot_factory.create_bot(Bridge().btype['chat'])
         self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
         self.handlers[Event.ON_RECEIVE_MESSAGE] = self.on_receive_message
+        logger.info("[Summary] inited")
+        
+        # 添加锁相关的属性
+        self._summary_locks = {}
+        self._locks_lock = threading.Lock()
+        
         logger.info("[Summary] inited")
 
     def _load_config_template(self):
@@ -233,6 +247,23 @@ class Summary(Plugin):
                               int(is_triggered))
         # logger.debug("[Summary] {}:{} ({})" .format(username, context.content, session_id))
 
+    def _acquire_summary_lock(self, session_id: str) -> bool:
+        """
+        尝试获取指定会话的总结锁
+        返回是否成功获取锁
+        """
+        with self._locks_lock:
+            if session_id in self._summary_locks:
+                # 如果锁已存在，说明正在进行总结
+                return False
+            self._summary_locks[session_id] = time.time()
+            return True
+
+    def _release_summary_lock(self, session_id: str):
+        """释放指定会话的总结锁"""
+        with self._locks_lock:
+            self._summary_locks.pop(session_id, None)
+
     def on_handle_context(self, e_context: EventContext):
 
         if e_context['context'].type != ContextType.TEXT:
@@ -269,23 +300,11 @@ class Summary(Plugin):
                     return
 
             if "总结" in clist[0]:
-                # 如果当前群聊在黑名单中，则不允许总结
-                if session_id in self.db.disable_group:
-                    logger.info("[Summary] summary stop")
-                    reply = Reply(ReplyType.TEXT, "请联系管理员开启总结功能")
-                    e_context['reply'] = reply
-                    e_context.action = EventAction.BREAK_PASS
-                    return
-
-                limit_time = self.config.get("rate_limit_summary", 60) * 60
-                last_time = self.db.get_summary_time(session_id)
-                current_time = time.time()
-                logger.debug("[Summary] last_time: %s, current_time: %s, limit_time: %s" % (last_time, current_time, limit_time))
-                if last_time is not None and current_time - last_time < limit_time:
-                    logger.info("[Summary] rate limit")
-                    session = self.bot.sessions.build_session(session_id, REPEAT_SUMMARY_PROMPT)
+                # 尝试获取锁
+                if not self._acquire_summary_lock(session_id):
+                    session = self.bot.sessions.build_session(session_id, SUMMARY_IN_PROGRESS_PROMPT)
                     session.add_query("问题：%s" % content)
-                    result = self.bot.reply_text(session)  
+                    result = self.bot.reply_text(session)
                     total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], result['content'] 
                     logger.debug("[Summary] total_tokens: %d, completion_tokens: %d, reply_content: %s" % (total_tokens, completion_tokens, reply_content))
                     if completion_tokens == 0:
@@ -295,68 +314,104 @@ class Summary(Plugin):
                     e_context['reply'] = reply
                     e_context.action = EventAction.BREAK_PASS
                     return
-                flag = False
-                if clist[0] == trigger_prefix + "总结":
-                    flag = True
-                    if len(clist) > 1:
-                        try:
-                            limit = int(clist[1])
-                            logger.debug("[Summary] limit: %d" % limit)
-                        except Exception as e:
-                            flag = False
-                if not flag:
-                    text = content.split(trigger_prefix, maxsplit=1)[1]
-                    try:
-                        command_json = find_json(self._translate_text_to_commands(text))
-                        command = json.loads(command_json)
-                        name = command["name"]
-                        if name.lower() == "summary":
-                            limit = int(command["args"].get("count", 9999))
-                            if limit < 0:
-                                limit = 9999
-                            duration = int(command["args"].get("duration_in_seconds", -1))
-                            logger.debug("[Summary] limit: %d, duration: %d seconds" % (limit, duration))
-                    except Exception as e:
-                        logger.error("[Summary] translate failed: %s" % e)
+
+                try:
+                    # 如果当前群聊在黑名单中，则不允许总结
+                    if session_id in self.db.disable_group:
+                        logger.info("[Summary] summary stop")
+                        reply = Reply(ReplyType.TEXT, "请联系管理员开启总结功能")
+                        e_context['reply'] = reply
+                        e_context.action = EventAction.BREAK_PASS
                         return
-            else:
-                return
 
-            start_time = int(time.time())
-            if duration > 0:
-                start_time = start_time - duration
-            else:
-                start_time = 0
+                    limit_time = self.config.get("rate_limit_summary", 60) * 60
+                    last_time = self.db.get_summary_time(session_id)
+                    current_time = time.time()
+                    logger.debug("[Summary] last_time: %s, current_time: %s, limit_time: %s" % (last_time, current_time, limit_time))
+                    if last_time is not None and current_time - last_time < limit_time:
+                        logger.info("[Summary] rate limit")
+                        session = self.bot.sessions.build_session(session_id, REPEAT_SUMMARY_PROMPT)
+                        session.add_query("问题：%s" % content)
+                        result = self.bot.reply_text(session)  
+                        total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], result['content'] 
+                        logger.debug("[Summary] total_tokens: %d, completion_tokens: %d, reply_content: %s" % (total_tokens, completion_tokens, reply_content))
+                        if completion_tokens == 0:
+                            reply = Reply(ReplyType.ERROR, "地主家的驴都没我累，请让我休息一会儿")
+                        else:
+                            reply = Reply(ReplyType.TEXT, reply_content)
+                        e_context['reply'] = reply
+                        e_context.action = EventAction.BREAK_PASS
+                        return
 
-            records = self.db.get_records(session_id, start_time, limit)
-            if len(records) <= 1:
-                reply = Reply(ReplyType.INFO, "无聊天记录可供总结")
+                    flag = False
+                    if clist[0] == trigger_prefix + "总结":
+                        flag = True
+                        if len(clist) > 1:
+                            try:
+                                limit = int(clist[1])
+                                logger.debug("[Summary] limit: %d" % limit)
+                            except Exception as e:
+                                flag = False
+                    if not flag:
+                        text = content.split(trigger_prefix, maxsplit=1)[1]
+                        try:
+                            command_json = find_json(self._translate_text_to_commands(text))
+                            command = json.loads(command_json)
+                            name = command["name"]
+                            if name.lower() == "summary":
+                                limit = int(command["args"].get("count", 9999))
+                                if limit < 0:
+                                    limit = 9999
+                                duration = int(command["args"].get("duration_in_seconds", -1))
+                                logger.debug("[Summary] limit: %d, duration: %d seconds" % (limit, duration))
+                        except Exception as e:
+                            logger.error("[Summary] translate failed: %s" % e)
+                            self._release_summary_lock(session_id)  # 解析失败时释放锁
+                            return
+
+                    start_time = int(time.time())
+                    if duration > 0:
+                        start_time = start_time - duration
+                    else:
+                        start_time = 0
+
+                    records = self.db.get_records(session_id, start_time, limit)
+                    if len(records) <= 1:
+                        reply = Reply(ReplyType.INFO, "无聊天记录可供总结")
+                        e_context['reply'] = reply
+                        e_context.action = EventAction.BREAK_PASS
+                        self._release_summary_lock(session_id)  # 无记录时释放锁
+                        return
+
+                    query = ""
+                    # 将聊天记录按照 昵称:内容 时间 的格式拼接
+                    for record in records:
+                        query += f"{record[2]}: {record[3]} {record[7]}\n"
+                    logger.debug("[Summary]  query: %s" % query)
+
+                    # 生成总结回复
+                    session = self.bot.sessions.build_session(session_id, SUMMARY_PROMPT)
+                    session.add_query("需要你总结的聊天记录如下：%s" % query)
+                    result = self.bot.reply_text(session)
+                    total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], \
+                        result['content']
+                    logger.debug("[Summary] total_tokens: %d, completion_tokens: %d, reply_content: %s" % (
+                        total_tokens, completion_tokens, reply_content))
+                    if completion_tokens == 0:
+                        reply = Reply(ReplyType.ERROR, "合并摘要失败，")
+                    else:
+                        image_path = self.convert_text_to_image(reply_content)
+                        logger.debug("[Summary] image_path: %s" % image_path)
+                        reply = Reply(ReplyType.IMAGE, open(image_path, 'rb'))
+                        os.remove(image_path)
+                        self.db.save_summary_time(session_id, int(time.time()))
+
+                finally:
+                    # 确保在所有处理完毕后释放锁
+                    self._release_summary_lock(session_id)
+
                 e_context['reply'] = reply
                 e_context.action = EventAction.BREAK_PASS
-                return
-            query = ""
-            # 将聊天记录按照 昵称:内容 时间 的格式拼接
-            for record in records:
-                query += f"{record[2]}: {record[3]} {record[7]}\n"
-            logger.debug("[Summary]  query: %s" % query)
-
-            session = self.bot.sessions.build_session(session_id, SUMMARY_PROMPT)
-            session.add_query("需要你总结的聊天记录如下：%s" % query)
-            result = self.bot.reply_text(session)
-            total_tokens, completion_tokens, reply_content = result['total_tokens'], result['completion_tokens'], \
-                result['content']
-            logger.debug("[Summary] total_tokens: %d, completion_tokens: %d, reply_content: %s" % (
-                total_tokens, completion_tokens, reply_content))
-            if completion_tokens == 0:
-                reply = Reply(ReplyType.ERROR, "合并摘要失败，")
-            else:
-                image_path = self.convert_text_to_image(reply_content)
-                logger.debug("[Summary] image_path: %s" % image_path)
-                reply = Reply(ReplyType.IMAGE, open(image_path, 'rb'))
-                os.remove(image_path)
-                self.db.save_summary_time(session_id, int(time.time()))
-            e_context['reply'] = reply
-            e_context.action = EventAction.BREAK_PASS  # 事件结束，并跳过处理context的默认逻辑
 
     def _translate_text_to_commands(self, text):
         # 随机的session id
