@@ -103,7 +103,7 @@ class Db:
             return None
         return row[0]
 
-    def get_records(self, session_id, start_timestamp:int = None, limit:int = None, username: list=None) -> list:
+    def get_records(self, session_id, start_timestamp:int = None, limit:int = None, username: list[str]=None) -> list:
         c = self.conn.cursor()
         
         # 构建基础SQL查询

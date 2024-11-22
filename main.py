@@ -140,11 +140,10 @@ def find_json(json_string):
         json_string = ""
     return json_string
 
-
 @plugins.register(name="summary",
                   desire_priority=0,
                   desc="A simple plugin to summary messages",
-                  version="0.0.7",
+                  version="0.0.8",
                   author="sineom")
 class Summary(Plugin):
     # 类级别常量
@@ -154,8 +153,8 @@ class Summary(Plugin):
     
     def __init__(self):
         super().__init__()
-        self._init_config()
         self._init_components()
+        self._init_config()
         self._init_handlers()
         
     def _init_config(self):
@@ -195,7 +194,7 @@ class Summary(Plugin):
             return msg.actual_user_nickname or msg.actual_user_id
         return msg.from_user_nickname or msg.from_user_id
 
-    async def _handle_command(self, e_context: EventContext) -> Optional[Reply]:
+    def _handle_command(self, e_context: EventContext) -> Optional[Reply]:
         """处理命令"""
         content = e_context['context'].content
         msg = e_context['context']['msg']
@@ -206,10 +205,10 @@ class Summary(Plugin):
             return command
             
         # 总结命令处理
-        if "总结" not in content:
+        if self.TRIGGER_PREFIX + "总结" not in content:
             return None
             
-        return await self._handle_summary_command(content, session_id)
+        return self._handle_summary_command(content, session_id, e_context)
 
     def _handle_admin_command(self, content: str, session_id: str, e_context: EventContext) -> Optional[Reply]:
         """处理管理员命令"""
@@ -226,14 +225,8 @@ class Summary(Plugin):
             
         return None
 
-    def _handle_summary_command(self, content: str, session_id: str) -> Reply:
-        """处理总结命令
-        Args:
-            content: 命令内容
-            session_id: 会话ID
-        Returns:
-            Reply: 回复内容
-        """
+    def _handle_summary_command(self, content: str, session_id: str, e_context: EventContext) -> Reply:
+        """处理总结命令"""
         # 检查锁
         if not self._acquire_summary_lock(session_id):
             return self._get_in_progress_reply(session_id, content)
@@ -243,30 +236,15 @@ class Summary(Plugin):
             if error_reply := self._check_summary_limits(session_id):
                 return error_reply
             
+            # 添加回复
+            e_context['reply'] = Reply(ReplyType.TEXT, "正在加速生成总结，请稍等")
+            e_context.action = EventAction.BREAK_PASS
             # 解析命令参数
             limit, duration, username = self._parse_summary_args(content)
             
-            
-            # 若存在用户名，则使用用户名查询+条件筛选
-            if username:
-                return self._generate_summary(session_id, 0, 0, username)
-            
-            # 如果解析失败，检查是否是用户名查询
-            if limit is None and duration is None:
-                # 移除命令前缀，获取可能的用户名
-                possible_username = content.split(self.TRIGGER_PREFIX + "总结", 1)[1].strip()
-                if possible_username:  # 只有当有实际内容时才按用户名查询
-                    logger.debug(f"[Summary] Treating '{possible_username}' as username query")
-                    return self._generate_summary(session_id, 0, 0, possible_username)
-                else:
-                    # 如果没有任何参数，使用默认值
-                    return Reply(ReplyType.TEXT, "请@具体用户名")
-            
-
-            
             # 生成总结
             start_time = int(time.time()) - duration if duration > 0 else 0
-            return self._generate_summary(session_id, start_time, limit or self.DEFAULT_LIMIT)
+            return self._generate_summary(session_id,start_time= start_time,limit= limit ,username=username)
             
         except Exception as e:
             logger.error(f"[Summary] Error handling summary command: {e}")
@@ -294,12 +272,11 @@ class Summary(Plugin):
             content: 用户输入的命令内容，例如"@妮可 @欧尼 3小时内的前99条消息"
             
         Returns:
-            Tuple[int, int, str]: 返回(消息数量限制, 时间范围(秒), 用户名列表)的元组
+            Tuple[int, int, str]: 返回(消息数量限制, 时间范围(秒), 用户名列表)的���组
             如果解析失败返回(None, None, None)
         """
         try:
             # 先提取所有@用户名
-            username = None
             usernames = []
             parts = content.split()
             cleaned_content = []
@@ -310,11 +287,8 @@ class Summary(Plugin):
                 else:
                     cleaned_content.append(part)
                     
-            if usernames:
-                username = ' '.join([f'@{name}' for name in usernames])
-                # 重组不含用户名的内容
-                content = ''.join(cleaned_content)
-            
+            content = ''.join(cleaned_content)
+            print(f"[Summary] username: {len(usernames)}")
             # 将中文内容转换为标准命令格式
             command_json = find_json(self._translate_text_to_commands(content))
             command = json.loads(command_json)
@@ -332,8 +306,8 @@ class Summary(Plugin):
                     duration = int(float(duration))
                 duration = max(int(duration), 0) or self.DEFAULT_DURATION
                 
-                logger.debug(f"[Summary] Parsed args: limit={limit}, duration={duration}, users={username}")
-                return limit, duration, username
+                logger.debug(f"[Summary] Parsed args: limit={limit}, duration={duration}, users={usernames}")
+                return limit, duration, usernames
                 
         except Exception as e:
             logger.error(f"[Summary] Failed to parse command: {e}")
@@ -394,7 +368,7 @@ class Summary(Plugin):
             username = cmsg.actual_user_nickname
             if username is None:
                 username = cmsg.actual_user_id
-        else:
+        else:   
             username = cmsg.from_user_nickname
             if username is None:
                 username = cmsg.from_user_id
@@ -434,18 +408,10 @@ class Summary(Plugin):
         with self._locks_lock:
             self._summary_locks.pop(session_id, None)
 
-    def _generate_summary(self, session_id: str,  limit: int = None, start_time: int = None, username: list = None) -> Reply:
-        """生成聊天记录总结
-        Args:
-            session_id: 会话ID
-            start_time: 开始时间，仅在 username 为 None 时使用
-            limit: 记录数量限制，仅在 username 为 None 时使用
-            username: 可选的用户名过滤，如果提供则忽略 start_time 和 limit
-        Returns:
-            Reply: 总结回复
-        """
+    def _generate_summary(self, session_id: str, start_time: int = None, limit: int = None, username: list = None) -> Reply:
+        """生成聊天记录总结"""
         try:
-            records = self.db.get_records(session_id, start_time, limit, username)
+            records = self.db.get_records(session_id, start_timestamp=start_time, limit=limit, username=username)
 
             # 检查记录数量
             if not records:
@@ -456,8 +422,7 @@ class Summary(Plugin):
             # 构建聊天记录文本
             chat_logs = []
             for record in records:
-                timestamp = time.strftime("%H:%M:%S", time.localtime(record[7])) if record[7] else ""
-                chat_logs.append(f"{record[2]}({timestamp}): {record[3]}")
+                chat_logs.append(f"{record[2]}({record[7]}): {record[3]}")
             chat_text = "\n".join(chat_logs)
             
             logger.debug("[Summary] Processing %d chat records for summary", len(records))
@@ -495,7 +460,7 @@ class Summary(Plugin):
             logger.error("[Summary] Error generating summary: %s", str(e))
             return Reply(ReplyType.TEXT, "生成总结时发生错误，请稍后重试")
 
-    async def on_handle_context(self, e_context: EventContext):
+    def on_handle_context(self, e_context: EventContext):
         """处理上下文事件"""
         if e_context['context'].type != ContextType.TEXT:
             return
@@ -509,7 +474,7 @@ class Summary(Plugin):
             return
         
         # 处理命令
-        reply = await self._handle_command(e_context)
+        reply = self._handle_command(e_context)
         if reply:
             e_context['reply'] = reply
             e_context.action = EventAction.BREAK_PASS
@@ -546,7 +511,7 @@ class Summary(Plugin):
         converter.close()
         return image_path
 
-    async def _get_in_progress_reply(self, session_id: str, content: str) -> Reply:
+    def _get_in_progress_reply(self, session_id: str, content: str) -> Reply:
         """获取正在处理中的回复"""
         try:
             session = self.bot.sessions.build_session(session_id, SUMMARY_IN_PROGRESS_PROMPT)
