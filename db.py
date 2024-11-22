@@ -94,22 +94,6 @@ class Db:
                   (summary_time, session_id))
         self.conn.commit()
     
-    # 根据user模糊匹配聊天记录，若user包含在条件中，则筛选出user的聊天记录
-    def get_records_by_user(self, session_id, user):
-        c = self.conn.cursor()
-        # 将搜索条件按@分割成多个用户名,并去掉@符号
-        users = [u.lstrip('@') for u in user.split() if u.startswith('@')]
-        if not users:
-            return []
-        # 构建SQL查询条件
-        sql = "SELECT * FROM chat_records WHERE sessionid=? AND ("
-        sql += " OR ".join(["user LIKE ?" for _ in users])
-        sql += ")"
-        # 构建参数列表
-        params = [session_id] + ["%" + u + "%" for u in users]
-        c.execute(sql, params)
-        return c.fetchall()
-
     # 获取总结时间，如果不存在返回None
     def get_summary_time(self, session_id):
         c = self.conn.cursor()
@@ -119,10 +103,36 @@ class Db:
             return None
         return row[0]
 
-    def get_records(self, session_id, start_timestamp=0, limit=9999) -> list:
+    def get_records(self, session_id, start_timestamp:int = None, limit:int = None, username: list=None) -> list:
         c = self.conn.cursor()
-        c.execute("SELECT * FROM chat_records WHERE sessionid=? and timestamp>? ORDER BY timestamp DESC LIMIT ?",
-                  (session_id, start_timestamp, limit))
+        
+        # 构建基础SQL查询
+        sql = "SELECT * FROM chat_records WHERE sessionid=?"
+        params = [session_id]
+
+        # 添加时间筛选条件
+        if start_timestamp:
+            sql += " AND timestamp>?"
+            params.append(start_timestamp)
+        
+        # 添加用户名筛选条件
+        if username:
+            # 将搜索条件按@分割成多个用户名,并去掉@符号
+            sql += " AND ("
+            sql += " OR ".join(["user LIKE ?" for _ in username])
+            sql += ")"
+            params.extend(["%" + u + "%" for u in username])
+            # 如果没有指定limit，则根据用户数量设置limit
+            if limit is None:
+                limit = len(username) * 250
+
+        # 添加排序和限制条件
+        sql += " ORDER BY timestamp DESC"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+
+        c.execute(sql, params)
         return c.fetchall()
 
     # 删除禁用的群聊
