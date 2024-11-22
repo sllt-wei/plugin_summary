@@ -143,7 +143,7 @@ def find_json(json_string):
 @plugins.register(name="summary",
                   desire_priority=0,
                   desc="A simple plugin to summary messages",
-                  version="0.0.8",
+                  version="0.0.9",
                   author="sineom")
 class Summary(Plugin):
     # 类级别常量
@@ -237,8 +237,7 @@ class Summary(Plugin):
                 return error_reply
             
             # 添加回复
-            e_context['reply'] = Reply(ReplyType.TEXT, "正在加速生成总结，请稍等")
-            e_context.action = EventAction.BREAK_PASS
+            _send_info(e_context, "正在加速生成总结，请稍等")
             # 解析命令参数
             limit, duration, username = self._parse_summary_args(content)
             
@@ -295,9 +294,9 @@ class Summary(Plugin):
             
             if command["name"].lower() == "summary":
                 args = command["args"]
-                
+                limit = int(args.get("count", None))
                 # 获取消息数量限制
-                limit = max(int(args.get("count", self.DEFAULT_LIMIT)), 0)
+                # limit = max(int(args.get("count", self.DEFAULT_LIMIT)), 0)
                 
                 # 获取时间范围(秒)
                 duration = args.get("duration_in_seconds", self.DEFAULT_DURATION)
@@ -562,3 +561,8 @@ class Summary(Plugin):
         except Exception as e:
             logger.error(f"[Summary] Failed to get rate limit reply: {e}")
             return Reply(ReplyType.TEXT, "请稍后再试")
+
+def _send_info(e_context: EventContext, content: str):
+    reply = Reply(ReplyType.TEXT, content)
+    channel = e_context["channel"]
+    channel.send(reply, e_context["context"])
